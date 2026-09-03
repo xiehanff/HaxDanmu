@@ -122,11 +122,10 @@ void main() {
     );
     await tester.pump();
 
-    // An active ticker would keep scheduling frames and make this time out.
-    await tester.pumpAndSettle(
-      const Duration(milliseconds: 10),
-      timeout: const Duration(milliseconds: 250),
-    );
+    // An active ticker schedules another frame after this pump. With no
+    // effective lane the queue must instead remain dormant until layout
+    // changes, so there should be no pending frame at all.
+    expect(tester.binding.hasScheduledFrame, isFalse);
   });
 
   testWidgets('stateful child keeps its own state when an earlier item exits',
