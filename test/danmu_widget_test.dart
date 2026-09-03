@@ -187,6 +187,61 @@ void main() {
     expect(find.text('B:B'), findsOneWidget);
     expect(find.text('B:A'), findsNothing);
   });
+
+  testWidgets('pause and resume do not turn wall-clock pause into motion',
+      (tester) async {
+    const childKey = ValueKey('moving-child');
+    final handle = DanmuHandle();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: SizedBox(
+            width: 300,
+            height: 40,
+            child: HaxDanmu(
+              handle: handle,
+              config: const DanmuConfig(
+                laneCount: 1,
+                laneHeight: 40,
+                laneSpacing: 0,
+                speed: 50,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      handle.send(const DanmuEntry(
+        id: 'moving',
+        width: 50,
+        child: SizedBox(key: childKey),
+      )),
+      DanmuEnqueueResult.accepted,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    final beforePause = tester.getTopLeft(find.byKey(childKey)).dx;
+
+    handle.pause();
+    await tester.pump(const Duration(seconds: 5));
+    final whilePaused = tester.getTopLeft(find.byKey(childKey)).dx;
+    expect(whilePaused, closeTo(beforePause, 0.001));
+
+    handle.play();
+    // The first ticker frame after resume deliberately carries a large wall
+    // clock delta. _lastTick was reset, so that delta must not move the item.
+    await tester.pump(const Duration(seconds: 5));
+    final firstResumeFrame = tester.getTopLeft(find.byKey(childKey)).dx;
+    expect(firstResumeFrame, closeTo(beforePause, 0.001));
+
+    await tester.pump(const Duration(seconds: 1));
+    final oneSecondLater = tester.getTopLeft(find.byKey(childKey)).dx;
+    expect(oneSecondLater, closeTo(beforePause - 50, 0.001));
+  });
 }
 
 class _RememberingDanmu extends StatefulWidget {

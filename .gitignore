@@ -19,8 +19,7 @@ migrate_working_dir/
 .idea/
 
 # The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
+# VS Code, so this line is commented out by default.
 #.vscode/
 
 # Flutter/Dart/Pub related
@@ -33,9 +32,11 @@ migrate_working_dir/
 build/
 coverage/
 
-# Libraries should not commit pubspecs' lockfiles.
-# The example app keeps its own lockfile at example/pubspec.lock.
+# This repository is a reusable package and its example participates in the
+# minimum/current Flutter compatibility matrix. Do not pin either dependency
+# graph to the Dart SDK that happened to generate a lockfile locally.
 /pubspec.lock
+/example/pubspec.lock
 
 # Symbolication related
 app.*.symbols

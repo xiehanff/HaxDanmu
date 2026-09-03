@@ -1,40 +1,61 @@
 # TODO
 
-评审遗留事项,按优先级分组。
+评审遗留事项，按优先级分组。已经完成的底层正确性修复不再混在待办中。
 
-## 关键缺口(v0.2 目标)
+## v0.2 关键缺口
 
-1. **文本便捷 API** —— 宿主目前必须自己用 `TextPainter` 量出宽度才能构造 `DanmuEntry`,是最大的易用性硬伤。
-   做法:增加 `DanmuEntry.text('...', style: ...)` 工厂,内部自动测宽并自动生成 `id`;
-   验收:demo 页改用 `text()` 发送纯文本弹幕,不再手写 `width: 220`。
+1. **文本便捷 API** —— 宿主目前必须自己量出文本宽度才能构造 `DanmuEntry`，是当前最大的易用性硬伤。
+   做法：增加文本便捷构造能力，内部通过 `TextPainter` 测量宽度，并处理文本方向、样式、缩放等影响实际宽度的输入；
+   验收：demo 页发送纯文本弹幕时不再手写固定 `width: 220`。
 
-2. **顶部/底部固定弹幕** —— 目前仅支持右→左滚动模式,弹幕库的基本盘缺一角。
-   做法:引入模式概念(滚动/顶部停驻/底部停驻),停驻型需处理驻留时长与同轨不重叠;
-   涉及 `DanmuEntry` 增加模式字段、`DanmuEngine` 轨道分配与离屏判定分支。
+2. **顶部 / 底部固定弹幕** —— 目前仅支持右→左滚动模式。
+   做法：引入模式概念（滚动 / 顶部停驻 / 底部停驻）；停驻型需要处理驻留时长、轨道占用、到期回收与同区域不重叠；
+   涉及 `DanmuEntry` 模式字段、Engine 调度与生命周期分支。
 
-3. **`DanmuEntry.id` 处置** —— 必填但引擎从未使用(不去重、不查找)。
-   做法:随条目 1 的 `text()` 工厂自动生成,同时把构造函数的 `id` 改为可选;
-   或者用起来(去重 / 撤回单条)。
+3. **`DanmuEntry.id` 的正式语义** —— 当前业务 `id` 不参与渲染 identity，也不用于去重、查找或撤回。
+   做法二选一：
+   - 把 `id` 改成可选，仅作为宿主业务字段；
+   - 或正式提供按 id 查询 / 撤回，并定义重复 id 的行为。
 
-## 次要建议
+## 性能与压力验证
 
-4. **`DanmuHandle` 重复 attach 防护** —— 同一 handle 被 attach 到第二个组件时会静默覆盖前者,前者失去控制。
-   做法:`attach()` 加 debug assert:已绑定未 detach 时立即报错。
+4. **建立可重复的性能基线** —— 当前目标是十几到几十条同时在屏弹幕，不以千级并发为目标。
+   建议至少覆盖：
+   - 10 / 30 / 100 active entries；
+   - 60Hz / 120Hz 设备；
+   - `RepaintBoundary` 开 / 关对 UI frame、Raster frame、layer count 和内存的影响；
+   - 长文本、复杂 Stateful child、不同 speed 混合轨道。
 
-5. **性能声明与压力测试** —— 现实现每帧重建 `Positioned` 触发 Stack relayout,几十条并发没问题,千级弹幕不在目标内。
-   做法:README 声明「千级弹幕 / Canvas 自绘渲染」为 non-goal;补一条高并发 widget 压测。
+5. **评估高密度渲染架构** —— 只有真实 profile 证明 `Stack + Positioned` 成为瓶颈后再做。
+   候选：`Flow`、自定义 `RenderBox`、Canvas / `CustomPainter` 批量绘制；
+   non-goal：为了理论性能提前把当前可维护的 Widget 渲染层整体重写。
 
-6. **时序 widget 测试** —— 组件测试目前只覆盖轨道 overlay。
-   做法:补一条「发送 → 按 `width / speed` 推进时长 → 断言离屏与轨道回收」的完整生命周期测试。
+6. **补更长时序压力测试** —— 当前已经覆盖 pause/resume、zero-size、轨道变化、队列上限、State identity 等关键边界；后续可增加持续发送 + resize + pause/resume 混合随机序列测试，验证长时间运行不出现队列越界或调度不变量破坏。
 
-## 上传 GitHub 后
+## 展示与文档
 
-7. README 补演示 GIF / 截图(放在特性列表旁)。
-8. README 增加英文段落(可选,面向国际用户)。
-9. example 页接入 `assets/icon.png`(如 AppBar leading);widget 测试中需用 `errorBuilder` 或注入 TestAssetBundle 规避资源加载失败。
-10. 用图标生成各平台启动器图标(`flutter_launcher_icons`);如需 1024px 源图,可从原 icns 的 `ic10` 块重新抽取。
+7. README 补演示 GIF / 截图（放在特性列表附近）。
+8. README 增加英文说明（可选，面向国际用户）。
+9. example 页接入 `assets/icon.png`（如 AppBar leading）。
+10. 如需要完整平台启动器图标，再引入图标生成流程。
 
 ## 发布 pub.dev 前
 
-11. 填写 pubspec 中 homepage / repository / issue_tracker 的占位 URL(当前为 YOUR_USERNAME)。
-12. description 补关键词(danmaku / barrage / bullet comments)。
+11. 填写 `pubspec.yaml` 中 homepage / repository / issue_tracker 的真实 URL（当前仍为 `YOUR_USERNAME`）。
+12. description 补充 danmaku / barrage / bullet comments 等检索关键词。
+13. 增加 `dart pub publish --dry-run` 的发布前检查，并确认 LICENSE / README / CHANGELOG / example 均满足 pub.dev 展示要求。
+
+## 已完成的评审修复
+
+以下项目已落代码并有回归测试，不再作为 TODO：
+
+- StatefulWidget 弹幕稳定 render identity；
+- 0 轨道 / 0 尺寸时停止无意义 Ticker；
+- active 弹幕冻结启动时有效 speed，避免运行时默认速度更新破坏防追尾；
+- `DanmuHandle` stale detach 所有权保护；
+- pre-layout 与 lane-waiting 统一受 `maxQueueSize` 总上限约束；
+- zero-size → 恢复布局时已接受 waiting entry 不再静默丢失；
+- `DanmuConfig` Release 模式运行时校验；
+- runtime 缩小 queue 上限时先利用新可用轨道，再裁剪剩余 waiting queue；
+- Engine / Widget 的 pause-resume、resize、clear、queue 极值等边界测试；
+- Flutter 最低版本与当前开发版本 CI matrix。

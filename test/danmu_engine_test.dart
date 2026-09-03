@@ -384,4 +384,219 @@ void main() {
     handle.play();
     expect(secondPlayCount, 1);
   });
+
+  group('validates config in every build mode', () {
+    final cases = <String, DanmuConfig>{
+      'nan lane height': const DanmuConfig(laneHeight: double.nan),
+      'infinite lane height':
+          const DanmuConfig(laneHeight: double.infinity),
+      'zero lane height': const DanmuConfig(laneHeight: 0),
+      'negative lane spacing': const DanmuConfig(laneSpacing: -1),
+      'nan lane spacing': const DanmuConfig(laneSpacing: double.nan),
+      'zero lane count': const DanmuConfig(laneCount: 0),
+      'negative gap': const DanmuConfig(gap: -1),
+      'infinite gap': const DanmuConfig(gap: double.infinity),
+      'zero speed': const DanmuConfig(speed: 0),
+      'nan speed': const DanmuConfig(speed: double.nan),
+      'zero queue size': const DanmuConfig(maxQueueSize: 0),
+      'overflowing lane extent': const DanmuConfig(
+        laneHeight: double.maxFinite,
+        laneSpacing: double.maxFinite,
+      ),
+    };
+
+    for (final MapEntry(key: name, value: config) in cases.entries) {
+      test(name, () {
+        expect(() => DanmuEngine(config), throwsArgumentError);
+      });
+    }
+  });
+
+  test('invalid runtime config leaves the previous config untouched', () {
+    final engine = DanmuEngine(const DanmuConfig(speed: 100));
+
+    expect(
+      () => engine.updateConfig(const DanmuConfig(speed: double.infinity)),
+      throwsArgumentError,
+    );
+
+    expect(engine.config.speed, 100);
+  });
+
+  test('maxQueueSize is a total bound before layout', () {
+    final engine = DanmuEngine(const DanmuConfig(maxQueueSize: 2));
+
+    expect(engine.enqueue(entry('one')), DanmuEnqueueResult.pendingLayout);
+    expect(engine.enqueue(entry('two')), DanmuEnqueueResult.pendingLayout);
+    expect(engine.enqueue(entry('three')), DanmuEnqueueResult.rejected);
+    expect(engine.snapshot.queuedCount, 2);
+
+    engine.configure(const Size(300, 160));
+
+    expect(engine.snapshot.activeCount, 2);
+    expect(engine.snapshot.queuedCount, 0);
+  });
+
+  test('pending-layout result is never silently lost after zero-size resize', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+        gap: 20,
+        speed: 100,
+        maxQueueSize: 2,
+      ),
+    );
+    engine.configure(const Size(300, 40));
+    expect(engine.enqueue(entry('active')), DanmuEnqueueResult.accepted);
+    expect(engine.enqueue(entry('already-waiting')), DanmuEnqueueResult.queued);
+
+    engine.configure(Size.zero);
+    expect(
+      engine.enqueue(entry('accepted-while-zero')),
+      DanmuEnqueueResult.pendingLayout,
+    );
+    expect(engine.enqueue(entry('over-capacity')), DanmuEnqueueResult.rejected);
+    expect(engine.snapshot.queuedCount, 2);
+
+    engine.configure(const Size(300, 40));
+    expect(engine.snapshot.queuedCount, 2);
+
+    engine.advance(const Duration(seconds: 4));
+    expect(engine.activeItems.single.entry.id, 'already-waiting');
+    expect(engine.snapshot.queuedCount, 1);
+
+    engine.advance(const Duration(seconds: 4));
+    expect(engine.activeItems.single.entry.id, 'accepted-while-zero');
+    expect(engine.snapshot.queuedCount, 0);
+  });
+
+  test('shrinking queue limit preserves priority and FIFO order', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+        gap: 20,
+        speed: 100,
+        maxQueueSize: 4,
+      ),
+    );
+    engine.configure(const Size(300, 40));
+    engine.enqueue(entry('active'));
+    engine.enqueue(entry('normal-1'));
+    engine.enqueue(entry('normal-2'));
+    engine.enqueue(const DanmuEntry(
+      id: 'high-1',
+      width: 100,
+      priority: DanmuPriority.high,
+      child: SizedBox(),
+    ));
+    engine.enqueue(const DanmuEntry(
+      id: 'high-2',
+      width: 100,
+      priority: DanmuPriority.high,
+      child: SizedBox(),
+    ));
+    expect(engine.snapshot.queuedCount, 4);
+
+    engine.updateConfig(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+        gap: 20,
+        speed: 100,
+        maxQueueSize: 2,
+      ),
+    );
+
+    expect(engine.snapshot.queuedCount, 2);
+    engine.advance(const Duration(seconds: 4));
+    expect(engine.activeItems.single.entry.id, 'high-1');
+    expect(engine.snapshot.queuedCount, 1);
+
+    engine.advance(const Duration(seconds: 4));
+    expect(engine.activeItems.single.entry.id, 'high-2');
+    expect(engine.snapshot.queuedCount, 0);
+  });
+
+  test('pause freezes motion and resume continues from the same position', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+        speed: 100,
+      ),
+    );
+    engine.configure(const Size(300, 40));
+    engine.enqueue(entry('moving'));
+
+    engine.advance(const Duration(seconds: 1));
+    final beforePause = engine.activeItems.single.left;
+
+    engine.pause();
+    engine.advance(const Duration(seconds: 5));
+    expect(engine.activeItems.single.left, beforePause);
+
+    engine.play();
+    engine.advance(const Duration(seconds: 1));
+    expect(engine.activeItems.single.left, closeTo(beforePause - 100, 0.001));
+  });
+
+  test('resize from lanes to zero and back preserves waiting work', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 4,
+        laneHeight: 40,
+        laneSpacing: 0,
+        maxQueueSize: 4,
+      ),
+    );
+    engine.configure(const Size(300, 160));
+    engine.enqueue(entry('lane-0'));
+    engine.enqueue(entry('lane-1'));
+    engine.enqueue(entry('lane-2'));
+    engine.enqueue(entry('lane-3'));
+    engine.enqueue(entry('waiting'));
+    expect(engine.snapshot.activeCount, 4);
+    expect(engine.snapshot.queuedCount, 1);
+
+    engine.configure(const Size(300, 20));
+
+    expect(engine.laneCount, 0);
+    expect(engine.snapshot.activeCount, 0);
+    expect(engine.snapshot.queuedCount, 1);
+    expect(engine.needsFrame, isFalse);
+
+    engine.configure(const Size(300, 160));
+
+    expect(engine.snapshot.activeCount, 1);
+    expect(engine.activeItems.single.entry.id, 'waiting');
+    expect(engine.snapshot.queuedCount, 0);
+  });
+
+  test('clear removes active and waiting entries in every geometry state', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+      ),
+    );
+    engine.configure(const Size(300, 40));
+    engine.enqueue(entry('active'));
+    engine.enqueue(entry('waiting'));
+    engine.configure(Size.zero);
+    engine.enqueue(entry('waiting-zero'));
+
+    engine.clear();
+
+    expect(engine.isIdle, isTrue);
+    expect(engine.snapshot.activeCount, 0);
+    expect(engine.snapshot.queuedCount, 0);
+    expect(engine.needsFrame, isFalse);
+  });
 }
