@@ -74,7 +74,6 @@ class _HaxDanmuState extends State<HaxDanmu>
   late final DanmuEngine _engine;
   late final Ticker _ticker;
   Duration? _lastTick;
-  bool? _tickerModeEnabled;
   Object? _handleAttachment;
 
   @override
@@ -88,10 +87,9 @@ class _HaxDanmuState extends State<HaxDanmu>
 
   @override
   void didChangeDependencies() {
+    final wasMuted = _ticker.muted;
     super.didChangeDependencies();
-    final tickerModeEnabled = TickerMode.of(context);
-    if (_tickerModeEnabled != tickerModeEnabled) {
-      _tickerModeEnabled = tickerModeEnabled;
+    if (wasMuted != _ticker.muted) {
       _resetTickBaseline();
     }
   }
