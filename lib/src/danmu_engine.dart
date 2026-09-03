@@ -9,7 +9,7 @@ enum DanmuPriority { normal, high }
 /// Internal lifecycle of the scheduling engine.
 enum DanmuPhase { unconfigured, ready, playing, paused }
 
-/// Outcome of [DanmuEngine.enqueue].
+/// Outcome of an enqueue request.
 enum DanmuEnqueueResult {
   /// Placed on a lane immediately.
   accepted,
@@ -99,19 +99,6 @@ class DanmuEntry {
 }
 
 @immutable
-class DanmuSnapshot {
-  const DanmuSnapshot({
-    required this.phase,
-    required this.activeCount,
-    required this.queuedCount,
-  });
-
-  final DanmuPhase phase;
-  final int activeCount;
-  final int queuedCount;
-}
-
-@immutable
 class ActiveDanmu {
   const ActiveDanmu({
     required this.entry,
@@ -123,16 +110,10 @@ class ActiveDanmu {
   final DanmuEntry entry;
   final int lane;
   final double left;
-
-  /// Engine-generated identity used by the Flutter adapter for stable element
-  /// reconciliation. Business ids are allowed to repeat.
   final int renderId;
 }
 
-/// Pure scheduling state: lanes, queueing, and per-frame motion.
-///
-/// This class intentionally lives behind the package's main public entrypoint;
-/// normal users interact with [HaxDanmu] through the exported widget API.
+/// Internal scheduling state: lanes, queueing, and per-frame motion.
 class DanmuEngine extends ChangeNotifier {
   DanmuEngine(DanmuConfig config) : _config = _validatedConfig(config);
 
@@ -145,9 +126,8 @@ class DanmuEngine extends ChangeNotifier {
   int _nextRenderId = 0;
 
   DanmuConfig get config => _config;
-  DanmuPhase get phase => _phase;
   int get laneCount => _laneCount;
-  bool get isIdle => _active.isEmpty && _queue.isEmpty;
+  int get waitingCount => _queue.length;
 
   bool get needsFrame =>
       _phase == DanmuPhase.playing &&
@@ -164,12 +144,6 @@ class DanmuEngine extends ChangeNotifier {
                   renderId: item.renderId,
                 ))
             .toList(growable: false),
-      );
-
-  DanmuSnapshot get snapshot => DanmuSnapshot(
-        phase: _phase,
-        activeCount: _active.length,
-        queuedCount: _queue.length,
       );
 
   /// Publishes viewport geometry. Never notifies because the widget calls this
@@ -243,14 +217,11 @@ class DanmuEngine extends ChangeNotifier {
     return _enqueueReady(entry);
   }
 
-  DanmuEnqueueResult _enqueueReady(
-    DanmuEntry entry, {
-    bool notify = true,
-  }) {
+  DanmuEnqueueResult _enqueueReady(DanmuEntry entry) {
     final lane = _findAvailableLane(entry);
     if (lane != null) {
       _activate(entry, lane);
-      if (notify) notifyListeners();
+      notifyListeners();
       return DanmuEnqueueResult.accepted;
     }
 
@@ -259,7 +230,7 @@ class DanmuEngine extends ChangeNotifier {
     }
 
     _enqueueQueued(entry);
-    if (notify) notifyListeners();
+    notifyListeners();
     return DanmuEnqueueResult.queued;
   }
 
