@@ -153,7 +153,7 @@ class ActiveDanmu {
     required this.entry,
     required this.lane,
     required this.left,
-    required this.renderId,
+    this.renderId = 0,
   });
 
   final DanmuEntry entry;
@@ -201,8 +201,11 @@ class DanmuHandle {
     return attachment;
   }
 
-  void detach(Object attachment) {
-    if (!identical(_attachment, attachment)) return;
+  /// Detaches the current command target. Passing the token returned by
+  /// [attach] makes the operation ownership-safe; omitting it preserves the
+  /// original 0.1 API and force-detaches whichever target is current.
+  void detach([Object? attachment]) {
+    if (attachment != null && !identical(_attachment, attachment)) return;
     _attachment = null;
     _send = null;
     _play = null;
