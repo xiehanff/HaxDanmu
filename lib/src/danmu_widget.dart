@@ -70,10 +70,11 @@ class HaxDanmu extends StatefulWidget {
 }
 
 class _HaxDanmuState extends State<HaxDanmu>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final DanmuEngine _engine;
   late final Ticker _ticker;
   Duration? _lastTick;
+  bool? _tickerModeEnabled;
   Object? _handleAttachment;
 
   @override
@@ -81,7 +82,23 @@ class _HaxDanmuState extends State<HaxDanmu>
     super.initState();
     _engine = DanmuEngine(widget.config);
     _ticker = createTicker(_onTick);
+    WidgetsBinding.instance.addObserver(this);
     _attachHandle(widget.handle);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final tickerModeEnabled = TickerMode.of(context);
+    if (_tickerModeEnabled != tickerModeEnabled) {
+      _tickerModeEnabled = tickerModeEnabled;
+      _resetTickBaseline();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _resetTickBaseline();
   }
 
   void _attachHandle(DanmuHandle? handle) {
@@ -116,6 +133,7 @@ class _HaxDanmuState extends State<HaxDanmu>
   @override
   void dispose() {
     _detachHandle(widget.handle);
+    WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     _engine.dispose();
     super.dispose();
@@ -146,12 +164,16 @@ class _HaxDanmuState extends State<HaxDanmu>
 
   void _ensureTicker() {
     if (_ticker.isActive) return;
-    _lastTick = null;
+    _resetTickBaseline();
     _ticker.start();
   }
 
   void _stopTicker() {
     if (_ticker.isActive) _ticker.stop();
+    _resetTickBaseline();
+  }
+
+  void _resetTickBaseline() {
     _lastTick = null;
   }
 
