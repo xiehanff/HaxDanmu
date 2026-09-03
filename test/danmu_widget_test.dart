@@ -281,6 +281,15 @@ void main() {
       closeTo(beforeMute, 0.001),
     );
 
+    // TickerMode enables the ticker during the rebuild; the resumed ticker's
+    // first callback is scheduled for the following frame. That callback must
+    // establish a fresh baseline without replaying the muted five seconds.
+    await tester.pump();
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforeMute, 0.001),
+    );
+
     await tester.pump(const Duration(seconds: 1));
     expect(
       tester.getTopLeft(find.byKey(childKey)).dx,
