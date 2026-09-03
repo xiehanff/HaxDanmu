@@ -130,12 +130,14 @@ class _HaxDanmuState extends State<HaxDanmu>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Fallbacks keep the component alive inside unbounded parents (for
-        // example a Column) instead of crashing on infinite constraints.
-        final size = Size(
+        // Fallbacks keep the component alive inside unbounded parents while
+        // constraints.constrain keeps Engine geometry identical to the final
+        // render size when the parent also supplies non-zero minimums.
+        final desiredSize = Size(
           constraints.maxWidth.isFinite ? constraints.maxWidth : 300,
           constraints.maxHeight.isFinite ? constraints.maxHeight : 160,
         );
+        final size = constraints.constrain(desiredSize);
         _engine.configure(size);
         // configure may activate pending/queued entries or invalidate the
         // geometry. Start frames only when time can visibly advance state.
