@@ -118,8 +118,10 @@ void main() {
 
   test('accepts sends before the first layout without losing them', () {
     final engine = DanmuEngine(const DanmuConfig(laneCount: 2));
-    expect(engine.enqueue(entry('before-layout')),
-        DanmuEnqueueResult.pendingLayout);
+    expect(
+      engine.enqueue(entry('before-layout')),
+      DanmuEnqueueResult.pendingLayout,
+    );
 
     engine.configure(const Size(300, 80));
 
@@ -197,7 +199,14 @@ void main() {
   });
 
   test('drops items on lanes removed by a config change', () {
-    final engine = DanmuEngine(const DanmuConfig(laneCount: 4, laneHeight: 40, laneSpacing: 0, gap: 0));
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 4,
+        laneHeight: 40,
+        laneSpacing: 0,
+        gap: 0,
+      ),
+    );
     engine.configure(const Size(300, 160));
     engine.enqueue(entry('a'));
     engine.enqueue(entry('b'));
@@ -205,7 +214,12 @@ void main() {
     expect(engine.activeItems.map((item) => item.lane), [0, 1, 2]);
 
     engine.updateConfig(
-      const DanmuConfig(laneCount: 2, laneHeight: 40, laneSpacing: 0, gap: 0),
+      const DanmuConfig(
+        laneCount: 2,
+        laneHeight: 40,
+        laneSpacing: 0,
+        gap: 0,
+      ),
     );
 
     expect(engine.laneCount, 2);
@@ -233,5 +247,141 @@ void main() {
       )),
       DanmuEnqueueResult.rejected,
     );
+  });
+
+  test('zero effective lanes queue without requesting animation frames', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+      ),
+    );
+    engine.configure(const Size(300, 20));
+
+    expect(engine.laneCount, 0);
+    expect(engine.enqueue(entry('waiting')), DanmuEnqueueResult.queued);
+    expect(engine.needsFrame, isFalse);
+
+    engine.configure(const Size(300, 40));
+
+    expect(engine.snapshot.activeCount, 1);
+    expect(engine.snapshot.queuedCount, 0);
+    expect(engine.activeItems.single.entry.id, 'waiting');
+    expect(engine.needsFrame, isTrue);
+  });
+
+  test('zero-size layout invalidates geometry without burning frames', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+      ),
+    );
+    engine.configure(const Size(300, 40));
+    engine.enqueue(entry('active'));
+    expect(engine.needsFrame, isTrue);
+
+    engine.configure(Size.zero);
+
+    expect(engine.laneCount, 0);
+    expect(engine.snapshot.activeCount, 1);
+    expect(engine.needsFrame, isFalse);
+
+    engine.configure(const Size(300, 40));
+
+    expect(engine.snapshot.activeCount, 1);
+    expect(engine.needsFrame, isTrue);
+  });
+
+  test('active entries keep their launch speed after config speed changes', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+        gap: 0,
+        speed: 60,
+      ),
+    );
+    engine.configure(const Size(300, 40));
+    engine.enqueue(const DanmuEntry(
+      id: 'front',
+      width: 50,
+      speed: 100,
+      child: SizedBox(),
+    ));
+    engine.advance(const Duration(seconds: 1));
+
+    expect(
+      engine.enqueue(const DanmuEntry(
+        id: 'default-speed',
+        width: 50,
+        child: SizedBox(),
+      )),
+      DanmuEnqueueResult.accepted,
+    );
+
+    engine.updateConfig(
+      const DanmuConfig(
+        laneCount: 1,
+        laneHeight: 40,
+        laneSpacing: 0,
+        gap: 0,
+        speed: 200,
+      ),
+    );
+    engine.advance(const Duration(seconds: 2));
+
+    final follower = engine.activeItems.singleWhere(
+      (item) => item.entry.id == 'default-speed',
+    );
+    expect(follower.left, closeTo(180, 0.001));
+  });
+
+  test('render identity is unique even when business ids repeat', () {
+    final engine = DanmuEngine(
+      const DanmuConfig(
+        laneCount: 2,
+        laneHeight: 40,
+        laneSpacing: 0,
+      ),
+    );
+    engine.configure(const Size(300, 80));
+    engine.enqueue(entry('same-id'));
+    engine.enqueue(entry('same-id'));
+
+    final ids = engine.activeItems.map((item) => item.renderId).toSet();
+    expect(ids, hasLength(2));
+  });
+
+  test('stale handle detach cannot clear a newer attachment', () {
+    final handle = DanmuHandle();
+    var firstPlayCount = 0;
+    var secondPlayCount = 0;
+
+    final firstAttachment = handle.attach(
+      send: (_) => DanmuEnqueueResult.accepted,
+      play: () => firstPlayCount++,
+      pause: () {},
+      clear: () {},
+    );
+    final secondAttachment = handle.attach(
+      send: (_) => DanmuEnqueueResult.accepted,
+      play: () => secondPlayCount++,
+      pause: () {},
+      clear: () {},
+    );
+
+    handle.detach(firstAttachment);
+    handle.play();
+
+    expect(firstPlayCount, 0);
+    expect(secondPlayCount, 1);
+
+    handle.detach(secondAttachment);
+    handle.play();
+    expect(secondPlayCount, 1);
   });
 }

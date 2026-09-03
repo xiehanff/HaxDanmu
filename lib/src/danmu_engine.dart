@@ -153,16 +153,21 @@ class ActiveDanmu {
     required this.entry,
     required this.lane,
     required this.left,
+    this.renderId = 0,
   });
 
   final DanmuEntry entry;
   final int lane;
   final double left;
+
+  /// Engine-generated identity for Flutter element reconciliation. It is
+  /// independent of [DanmuEntry.id], which is allowed to repeat.
+  final int renderId;
 }
 
-/// A command bridge. It owns no state; the widget installs callbacks.
-/// Every method is a safe no-op once the widget detaches (or was never
-/// mounted), so hosts may keep calling after a route pop.
+/// A command bridge. It owns no playback state; the widget installs callbacks.
+/// Every command is a safe no-op once the current widget detaches (or before
+/// any widget mounts), so hosts may keep the handle across route changes.
 class DanmuHandle {
   DanmuEnqueueResult send(DanmuEntry entry) =>
       _send?.call(entry) ?? DanmuEnqueueResult.rejected;
@@ -175,20 +180,33 @@ class DanmuHandle {
   VoidCallback? _play;
   VoidCallback? _pause;
   VoidCallback? _clear;
+  Object? _attachment;
 
-  void attach({
+  /// Installs a command target and returns an ownership token. A later attach
+  /// replaces the previous target. Calling [detach] with a stale token is a
+  /// no-op, so disposal of an old widget cannot detach a newer widget that
+  /// reused the same handle.
+  Object attach({
     required DanmuEnqueueResult Function(DanmuEntry entry) send,
     required VoidCallback play,
     required VoidCallback pause,
     required VoidCallback clear,
   }) {
+    final attachment = Object();
+    _attachment = attachment;
     _send = send;
     _play = play;
     _pause = pause;
     _clear = clear;
+    return attachment;
   }
 
-  void detach() {
+  /// Detaches the current command target. Passing the token returned by
+  /// [attach] makes the operation ownership-safe; omitting it preserves the
+  /// original 0.1 API and force-detaches whichever target is current.
+  void detach([Object? attachment]) {
+    if (attachment != null && !identical(_attachment, attachment)) return;
+    _attachment = null;
     _send = null;
     _play = null;
     _pause = null;
@@ -210,6 +228,7 @@ class DanmuEngine extends ChangeNotifier {
   DanmuPhase _phase = DanmuPhase.unconfigured;
   Size _size = Size.zero;
   int _laneCount = 0;
+  int _nextRenderId = 0;
 
   /// The active config; replace it at runtime with [updateConfig].
   DanmuConfig get config => _config;
@@ -221,10 +240,18 @@ class DanmuEngine extends ChangeNotifier {
   /// than one lane keeps messages queued until it grows.
   int get laneCount => _laneCount;
 
-  /// True when nothing is active, queued, or awaiting layout. The widget
-  /// stops its ticker while idle to avoid burning frames.
+  /// True when nothing is active, queued, or awaiting layout.
   bool get isIdle =>
       _active.isEmpty && _queue.isEmpty && _pendingLayout.isEmpty;
+
+  /// Whether advancing time can visibly change the current frame. Waiting
+  /// entries alone do not need a ticker: they are drained synchronously when
+  /// layout/config changes make a lane available.
+  bool get needsFrame =>
+      _phase == DanmuPhase.playing &&
+      _active.isNotEmpty &&
+      _size != Size.zero &&
+      _laneCount > 0;
 
   UnmodifiableListView<ActiveDanmu> get activeItems => UnmodifiableListView(
         _active
@@ -232,6 +259,7 @@ class DanmuEngine extends ChangeNotifier {
                   entry: item.entry,
                   lane: item.lane,
                   left: item.left,
+                  renderId: item.renderId,
                 ))
             .toList(growable: false),
       );
@@ -245,7 +273,16 @@ class DanmuEngine extends ChangeNotifier {
   /// Publishes the viewport size. Never notifies: it is called from build,
   /// and the caller rebuilds in the same frame anyway.
   void configure(Size size) {
-    if (size.width <= 0 || size.height <= 0) return;
+    if (!size.width.isFinite ||
+        !size.height.isFinite ||
+        size.width <= 0 ||
+        size.height <= 0) {
+      // Invalidate geometry so the widget can stop its ticker. Active entries
+      // are kept and may resume if a later valid layout can still host them.
+      _size = Size.zero;
+      _laneCount = 0;
+      return;
+    }
     final nextLaneCount = _laneCountFor(size);
     if (_size == size && _laneCount == nextLaneCount) return;
     _size = size;
@@ -256,16 +293,20 @@ class DanmuEngine extends ChangeNotifier {
     while (_pendingLayout.isNotEmpty) {
       _enqueueReady(_pendingLayout.removeFirst(), notify: false);
     }
+    _drainQueue();
   }
 
   /// Applies a new config at runtime (e.g. from [State.didUpdateWidget]).
   /// Lane metrics are recomputed and active entries on removed lanes are
   /// dropped so they cannot keep scrolling through invisible geometry.
+  /// Existing active entries keep the effective speed they had at launch;
+  /// a new default speed only affects entries activated afterwards.
   void updateConfig(DanmuConfig value) {
     if (value == _config) return;
     _config = value;
     if (_size == Size.zero) return;
     _setLaneCount(_laneCountFor(_size));
+    _drainQueue();
     notifyListeners();
   }
 
@@ -361,7 +402,7 @@ class DanmuEngine extends ChangeNotifier {
     final seconds = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
     if (seconds <= 0) return;
     for (final item in _active) {
-      item.left -= (item.entry.speed ?? _config.speed) * seconds;
+      item.left -= item.speed * seconds;
     }
     _active.removeWhere((item) => item.left + item.entry.width <= 0);
     _drainQueue();
@@ -403,10 +444,9 @@ class DanmuEngine extends ChangeNotifier {
         if (item.lane != lane) continue;
         final tail = item.left + item.entry.width;
         if (tail > nearestTail) nearestTail = tail;
-        final itemSpeed = item.entry.speed ?? _config.speed;
-        if (entrySpeed > itemSpeed) {
-          final timeToCatch = (_size.width - tail) / (entrySpeed - itemSpeed);
-          final timeToExit = tail / itemSpeed;
+        if (entrySpeed > item.speed) {
+          final timeToCatch = (_size.width - tail) / (entrySpeed - item.speed);
+          final timeToExit = tail / item.speed;
           if (timeToCatch < timeToExit) {
             catchesUp = true;
             break;
@@ -423,14 +463,30 @@ class DanmuEngine extends ChangeNotifier {
   }
 
   void _activate(DanmuEntry entry, int lane) {
-    _active.add(_DanmuItem(entry: entry, lane: lane, left: _size.width));
+    _active.add(
+      _DanmuItem(
+        entry: entry,
+        lane: lane,
+        left: _size.width,
+        speed: entry.speed ?? _config.speed,
+        renderId: _nextRenderId++,
+      ),
+    );
   }
 }
 
 class _DanmuItem {
-  _DanmuItem({required this.entry, required this.lane, required this.left});
+  _DanmuItem({
+    required this.entry,
+    required this.lane,
+    required this.left,
+    required this.speed,
+    required this.renderId,
+  });
 
   final DanmuEntry entry;
   final int lane;
+  final double speed;
+  final int renderId;
   double left;
 }

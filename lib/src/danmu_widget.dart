@@ -39,6 +39,7 @@ class _HaxDanmuState extends State<HaxDanmu>
   late final DanmuEngine _engine;
   late final Ticker _ticker;
   Duration? _lastTick;
+  Object? _handleAttachment;
 
   @override
   void initState() {
@@ -49,12 +50,20 @@ class _HaxDanmuState extends State<HaxDanmu>
   }
 
   void _attachHandle(DanmuHandle? handle) {
-    handle?.attach(
+    _handleAttachment = handle?.attach(
       send: _send,
       play: _play,
       pause: _pause,
       clear: _engine.clear,
     );
+  }
+
+  void _detachHandle(DanmuHandle? handle) {
+    final attachment = _handleAttachment;
+    if (handle != null && attachment != null) {
+      handle.detach(attachment);
+    }
+    _handleAttachment = null;
   }
 
   @override
@@ -64,42 +73,40 @@ class _HaxDanmuState extends State<HaxDanmu>
       _engine.updateConfig(widget.config);
     }
     if (oldWidget.handle != widget.handle) {
-      oldWidget.handle?.detach();
+      _detachHandle(oldWidget.handle);
       _attachHandle(widget.handle);
     }
   }
 
   @override
   void dispose() {
-    widget.handle?.detach();
+    _detachHandle(widget.handle);
     _ticker.dispose();
     _engine.dispose();
-    widget.onDisposed?.call();
-    super.dispose();
+    try {
+      widget.onDisposed?.call();
+    } finally {
+      super.dispose();
+    }
   }
 
   void _onTick(Duration elapsed) {
     final previous = _lastTick;
     _lastTick = elapsed;
     if (previous != null) _engine.advance(elapsed - previous);
-    // Nothing left to animate: stop the ticker but keep the playing phase,
-    // so the next accepted send restarts motion without an explicit play.
-    if (_engine.isIdle) _stopTicker();
+    // Waiting entries without an active lane do not need frame callbacks.
+    if (!_engine.needsFrame) _stopTicker();
   }
 
   DanmuEnqueueResult _send(DanmuEntry entry) {
     final result = _engine.enqueue(entry);
-    if (_engine.phase == DanmuPhase.playing &&
-        (result == DanmuEnqueueResult.accepted ||
-            result == DanmuEnqueueResult.queued)) {
-      _ensureTicker();
-    }
+    if (_engine.needsFrame) _ensureTicker();
     return result;
   }
 
   void _play() {
     _engine.play();
-    if (_engine.phase == DanmuPhase.playing) _ensureTicker();
+    if (_engine.needsFrame) _ensureTicker();
   }
 
   void _pause() {
@@ -115,7 +122,7 @@ class _HaxDanmuState extends State<HaxDanmu>
   }
 
   void _stopTicker() {
-    _ticker.stop();
+    if (_ticker.isActive) _ticker.stop();
     _lastTick = null;
   }
 
@@ -130,8 +137,13 @@ class _HaxDanmuState extends State<HaxDanmu>
           constraints.maxHeight.isFinite ? constraints.maxHeight : 160,
         );
         _engine.configure(size);
-        // configure may have activated pending entries (autoStart).
-        if (_engine.phase == DanmuPhase.playing) _ensureTicker();
+        // configure may activate pending/queued entries or invalidate the
+        // geometry. Start frames only when time can visibly advance state.
+        if (_engine.needsFrame) {
+          _ensureTicker();
+        } else {
+          _stopTicker();
+        }
         return AnimatedBuilder(
           animation: _engine,
           builder: (context, child) => ClipRect(
@@ -151,6 +163,7 @@ class _HaxDanmuState extends State<HaxDanmu>
                     ),
                   ..._engine.activeItems.map(
                     (item) => Positioned(
+                      key: ValueKey(item.renderId),
                       left: item.left,
                       top: item.lane * widget.config.laneExtent,
                       width: item.entry.width,
