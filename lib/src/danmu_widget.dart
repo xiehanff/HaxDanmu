@@ -174,29 +174,31 @@ class _HaxDanmuState extends State<HaxDanmu>
 
         return AnimatedBuilder(
           animation: _engine,
-          builder: (context, child) => SizedBox(
-            width: size.width,
-            height: size.height,
-            child: Stack(
-              clipBehavior: Clip.hardEdge,
-              children: [
-                if (widget.showLanes)
-                  _LaneOverlay(
-                    laneCount: _engine.laneCount,
-                    extent: widget.config.laneExtent,
-                    spacing: widget.config.laneSpacing,
+          builder: (context, child) => ClipRect(
+            child: SizedBox(
+              width: size.width,
+              height: size.height,
+              child: Stack(
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  if (widget.showLanes)
+                    _LaneOverlay(
+                      laneCount: _engine.laneCount,
+                      extent: widget.config.laneExtent,
+                      spacing: widget.config.laneSpacing,
+                    ),
+                  ..._engine.activeItems.map(
+                    (item) => Positioned(
+                      key: ValueKey(item.renderId),
+                      left: item.left,
+                      top: item.lane * widget.config.laneExtent,
+                      width: item.entry.width,
+                      height: widget.config.laneHeight,
+                      child: RepaintBoundary(child: item.entry.child),
+                    ),
                   ),
-                ..._engine.activeItems.map(
-                  (item) => Positioned(
-                    key: ValueKey(item.renderId),
-                    left: item.left,
-                    top: item.lane * widget.config.laneExtent,
-                    width: item.entry.width,
-                    height: widget.config.laneHeight,
-                    child: RepaintBoundary(child: item.entry.child),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
