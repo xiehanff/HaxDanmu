@@ -2,36 +2,22 @@ import 'dart:collection';
 
 import 'package:flutter/widgets.dart';
 
-/// Playback priority. High-priority entries jump ahead of normal ones in
-/// the waiting queue when every lane is busy.
+/// Playback priority for entries waiting to be activated.
 enum DanmuPriority { normal, high }
 
-/// Lifecycle of the engine. A single enum prevents impossible flag
-/// combinations such as "playing while paused".
-enum DanmuPhase { unconfigured, ready, playing, paused }
-
-/// Outcome of [DanmuHandle.send] / [DanmuEngine.enqueue].
+/// Result returned by [DanmuHandle.send].
 enum DanmuEnqueueResult {
   /// Placed on a lane immediately.
   accepted,
 
-  /// All lanes busy; stored in the waiting queue.
+  /// Accepted and waiting for layout or an available lane.
   queued,
 
-  /// Stored in the waiting queue until layout geometry becomes available.
-  pendingLayout,
-
-  /// Dropped: invalid entry, or the waiting queue is full.
+  /// Rejected because the entry is invalid or the waiting queue is full.
   rejected,
 }
 
-/// Layout and motion rules. Immutable value object with structural equality
-/// so the widget can detect config changes in [State.didUpdateWidget] and
-/// forward them to [DanmuEngine.updateConfig].
-///
-/// Values are validated by [DanmuEngine] in all build modes. Keeping this
-/// constructor const lets hosts declare compile-time configs without relying
-/// on debug-only asserts for correctness.
+/// Immutable layout and motion configuration for [HaxDanmu].
 @immutable
 class DanmuConfig {
   const DanmuConfig({
@@ -44,31 +30,32 @@ class DanmuConfig {
     this.autoStart = true,
   });
 
-  /// Painted height of one entry.
+  /// Painted height of one lane entry.
   final double laneHeight;
 
-  /// Vertical space between neighbouring lanes.
+  /// Vertical spacing after each lane.
   final double laneSpacing;
 
-  /// Maximum number of lanes. The effective count also depends on the
-  /// available height and is exposed by [DanmuEngine.laneCount].
+  /// Maximum number of lanes; actual count also depends on viewport height.
   final int laneCount;
 
-  /// Minimum horizontal distance between the tail of the last entry on a
-  /// lane and the head of the next one at launch time.
+  /// Minimum launch gap between neighbouring entries on one lane.
   final double gap;
 
   /// Default scrolling speed in logical pixels per second.
   final double speed;
 
-  /// Maximum total number of entries waiting to be activated, including
-  /// entries sent before layout is available.
+  /// Maximum number of entries waiting to be activated.
+  ///
+  /// This is an admission limit. Lowering it at runtime does not discard
+  /// entries that were already accepted; new sends are rejected until the
+  /// waiting count falls below the new limit.
   final int maxQueueSize;
 
-  /// Whether [DanmuPhase.playing] is entered on the first layout.
+  /// Whether playback starts automatically once valid layout is available.
   final bool autoStart;
 
-  /// Vertical pitch of one lane: painted height plus spacing.
+  /// Vertical pitch occupied by one lane.
   double get laneExtent => laneHeight + laneSpacing;
 
   @override
@@ -100,11 +87,7 @@ class DanmuConfig {
       'maxQueueSize: $maxQueueSize, autoStart: $autoStart)';
 }
 
-/// One danmu payload. [width] must match the painted width of [child]: the
-/// engine never lays [child] out, it only positions it. Entries whose
-/// [width] or [speed] is non-positive or NaN are rejected by
-/// [DanmuEngine.enqueue] in release builds as well, because asserts are
-/// stripped there and such entries would corrupt motion and lane recycling.
+/// One danmu payload.
 @immutable
 class DanmuEntry {
   const DanmuEntry({
@@ -116,201 +99,106 @@ class DanmuEntry {
     this.laneHint,
   }) : assert(width > 0 && width != double.infinity);
 
+  /// Host-owned business identifier. It is not used as render identity.
   final String id;
+
+  /// Widget painted for this entry.
   final Widget child;
 
-  /// Painted width of [child] in logical pixels.
+  /// Expected painted width of [child] in logical pixels.
+  ///
+  /// The scheduler uses this value for collision and exit calculations, so it
+  /// must match the rendered width supplied by the host.
   final double width;
 
-  /// Per-entry override of [DanmuConfig.speed] in logical pixels per second.
+  /// Optional per-entry speed override.
   final double? speed;
 
+  /// Waiting-queue priority.
   final DanmuPriority priority;
 
-  /// Preferred lane; ignored when out of range for the current layout.
+  /// Preferred lane; ignored when unavailable or out of range.
   final int? laneHint;
 }
 
-/// Point-in-time counters for host-side diagnostics.
-@immutable
-class DanmuSnapshot {
-  const DanmuSnapshot({
-    required this.phase,
-    required this.activeCount,
-    required this.queuedCount,
-  });
+enum _DanmuPhase { unconfigured, stopped, playing }
 
-  final DanmuPhase phase;
-  final int activeCount;
-  final int queuedCount;
-}
-
-/// Render-ready projection of one active item, in logical pixels relative to
-/// the viewport passed to [DanmuEngine.configure].
-@immutable
+/// Internal mutable render/scheduling item shared with the Flutter adapter.
 class ActiveDanmu {
-  const ActiveDanmu({
+  ActiveDanmu({
     required this.entry,
     required this.lane,
     required this.left,
-    this.renderId = 0,
+    required this.speed,
+    required this.renderId,
   });
 
   final DanmuEntry entry;
   final int lane;
-  final double left;
-
-  /// Engine-generated identity for Flutter element reconciliation. It is
-  /// independent of [DanmuEntry.id], which is allowed to repeat.
+  final double speed;
   final int renderId;
+  double left;
 }
 
-/// A command bridge. It owns no playback state; the widget installs callbacks.
-/// Every command is a safe no-op once the current widget detaches (or before
-/// any widget mounts), so hosts may keep the handle across route changes.
-class DanmuHandle {
-  DanmuEnqueueResult send(DanmuEntry entry) =>
-      _send?.call(entry) ?? DanmuEnqueueResult.rejected;
-
-  void play() => _play?.call();
-  void pause() => _pause?.call();
-  void clear() => _clear?.call();
-
-  DanmuEnqueueResult Function(DanmuEntry entry)? _send;
-  VoidCallback? _play;
-  VoidCallback? _pause;
-  VoidCallback? _clear;
-  Object? _attachment;
-
-  /// Installs a command target and returns an ownership token. A later attach
-  /// replaces the previous target. Calling [detach] with a stale token is a
-  /// no-op, so disposal of an old widget cannot detach a newer widget that
-  /// reused the same handle.
-  Object attach({
-    required DanmuEnqueueResult Function(DanmuEntry entry) send,
-    required VoidCallback play,
-    required VoidCallback pause,
-    required VoidCallback clear,
-  }) {
-    final attachment = Object();
-    _attachment = attachment;
-    _send = send;
-    _play = play;
-    _pause = pause;
-    _clear = clear;
-    return attachment;
-  }
-
-  /// Detaches the current command target. Passing the token returned by
-  /// [attach] makes the operation ownership-safe; omitting it preserves the
-  /// original 0.1 API and force-detaches whichever target is current.
-  void detach([Object? attachment]) {
-    if (attachment != null && !identical(_attachment, attachment)) return;
-    _attachment = null;
-    _send = null;
-    _play = null;
-    _pause = null;
-    _clear = null;
-  }
-}
-
-/// Pure scheduling state: lanes, queueing, and per-frame motion. The widget
-/// supplies the clock, so this class can be tested without a Flutter frame
-/// and reused by another renderer.
+/// Internal scheduling state: lanes, queueing, and per-frame motion.
 class DanmuEngine extends ChangeNotifier {
   DanmuEngine(DanmuConfig config) : _config = _validatedConfig(config);
 
   DanmuConfig _config;
-
-  final List<_DanmuItem> _active = [];
+  final List<ActiveDanmu> _active = [];
+  late final UnmodifiableListView<ActiveDanmu> _activeView =
+      UnmodifiableListView(_active);
   final Queue<DanmuEntry> _queue = Queue<DanmuEntry>();
-  DanmuPhase _phase = DanmuPhase.unconfigured;
+  _DanmuPhase _phase = _DanmuPhase.unconfigured;
   Size _size = Size.zero;
   int _laneCount = 0;
   int _nextRenderId = 0;
 
-  /// The active config; replace it at runtime with [updateConfig].
   DanmuConfig get config => _config;
-
-  DanmuPhase get phase => _phase;
-
-  /// Lanes available for the current size: 0 before the first [configure],
-  /// afterwards between 0 and [DanmuConfig.laneCount]. A viewport shorter
-  /// than one lane keeps messages queued until it grows.
   int get laneCount => _laneCount;
+  int get waitingCount => _queue.length;
+  UnmodifiableListView<ActiveDanmu> get activeItems => _activeView;
 
-  /// True when nothing is active or waiting to be activated.
-  bool get isIdle => _active.isEmpty && _queue.isEmpty;
-
-  /// Whether advancing time can visibly change the current frame. Waiting
-  /// entries alone do not need a ticker: they are drained synchronously when
-  /// layout/config changes make a lane available.
   bool get needsFrame =>
-      _phase == DanmuPhase.playing &&
+      _phase == _DanmuPhase.playing &&
       _active.isNotEmpty &&
       _size != Size.zero &&
       _laneCount > 0;
 
-  UnmodifiableListView<ActiveDanmu> get activeItems => UnmodifiableListView(
-        _active
-            .map((item) => ActiveDanmu(
-                  entry: item.entry,
-                  lane: item.lane,
-                  left: item.left,
-                  renderId: item.renderId,
-                ))
-            .toList(growable: false),
-      );
-
-  DanmuSnapshot get snapshot => DanmuSnapshot(
-        phase: _phase,
-        activeCount: _active.length,
-        queuedCount: _queue.length,
-      );
-
-  /// Publishes the viewport size. Never notifies: it is called from build,
-  /// and the caller rebuilds in the same frame anyway.
+  /// Publishes viewport geometry. Never notifies because the widget calls this
+  /// from build and already rebuilds in the same frame.
   void configure(Size size) {
     if (!size.width.isFinite ||
         !size.height.isFinite ||
         size.width <= 0 ||
         size.height <= 0) {
-      // Invalidate geometry so the widget can stop its ticker. Active entries
-      // and the waiting queue are kept and may resume on a later valid layout.
       _size = Size.zero;
       _laneCount = 0;
       return;
     }
+
     final nextLaneCount = _laneCountFor(size);
     if (_size == size && _laneCount == nextLaneCount) return;
+
     _size = size;
     _setLaneCount(nextLaneCount);
-    if (_phase == DanmuPhase.unconfigured) {
-      _phase = _config.autoStart ? DanmuPhase.playing : DanmuPhase.ready;
+    if (_phase == _DanmuPhase.unconfigured) {
+      _phase = _config.autoStart ? _DanmuPhase.playing : _DanmuPhase.stopped;
     }
     _drainQueue();
   }
 
-  /// Applies a new config at runtime (e.g. from [State.didUpdateWidget]).
-  /// Lane metrics are recomputed and active entries on removed lanes are
-  /// dropped so they cannot keep scrolling through invisible geometry.
-  /// Existing active entries keep the effective speed they had at launch;
-  /// a new default speed only affects entries activated afterwards.
-  ///
-  /// If [DanmuConfig.maxQueueSize] shrinks below the current waiting count,
-  /// entries that can immediately use newly available lanes are activated
-  /// first. Any remaining overflow is then trimmed from the queue tail.
-  /// Because high-priority entries are stored first and each priority is FIFO,
-  /// trimming drops lower-priority and newer waiting entries first.
+  /// Applies runtime configuration without retroactively discarding entries
+  /// that the engine already accepted into the waiting queue.
   void updateConfig(DanmuConfig value) {
     final validated = _validatedConfig(value);
     if (validated == _config) return;
+
     _config = validated;
     if (_size != Size.zero) {
       _setLaneCount(_laneCountFor(_size));
       _drainQueue();
     }
-    _trimQueueToLimit();
     notifyListeners();
   }
 
@@ -330,41 +218,39 @@ class DanmuEngine extends ChangeNotifier {
   }
 
   DanmuEnqueueResult enqueue(DanmuEntry entry) {
-    // Release builds strip asserts, so the engine re-checks the invariants
-    // it depends on: a non-positive width breaks exit detection and a
-    // non-positive speed freezes an entry inside its lane forever.
     final entrySpeed = entry.speed;
     final invalidSpeed =
         entrySpeed != null && (!entrySpeed.isFinite || entrySpeed <= 0);
     if (!entry.width.isFinite || entry.width <= 0 || invalidSpeed) {
       return DanmuEnqueueResult.rejected;
     }
+
     if (_size == Size.zero) {
       if (_queue.length >= _config.maxQueueSize) {
         return DanmuEnqueueResult.rejected;
       }
       _enqueueQueued(entry);
-      return DanmuEnqueueResult.pendingLayout;
+      return DanmuEnqueueResult.queued;
     }
+
     return _enqueueReady(entry);
   }
 
-  DanmuEnqueueResult _enqueueReady(
-    DanmuEntry entry, {
-    bool notify = true,
-  }) {
+  DanmuEnqueueResult _enqueueReady(DanmuEntry entry) {
     final lane = _findAvailableLane(entry);
-    final result =
-        lane == null ? DanmuEnqueueResult.queued : DanmuEnqueueResult.accepted;
-    if (result == DanmuEnqueueResult.accepted) {
-      _activate(entry, lane!);
-    } else if (_queue.length < _config.maxQueueSize) {
-      _enqueueQueued(entry);
-    } else {
+    if (lane != null) {
+      _activate(entry, lane);
+      notifyListeners();
+      return DanmuEnqueueResult.accepted;
+    }
+
+    if (_queue.length >= _config.maxQueueSize) {
       return DanmuEnqueueResult.rejected;
     }
-    if (notify) notifyListeners();
-    return result;
+
+    _enqueueQueued(entry);
+    notifyListeners();
+    return DanmuEnqueueResult.queued;
   }
 
   void _enqueueQueued(DanmuEntry entry) {
@@ -372,6 +258,7 @@ class DanmuEngine extends ChangeNotifier {
       _queue.add(entry);
       return;
     }
+
     final entries = _queue.toList();
     var insertAt = 0;
     while (insertAt < entries.length &&
@@ -384,22 +271,16 @@ class DanmuEngine extends ChangeNotifier {
       ..addAll(entries);
   }
 
-  void _trimQueueToLimit() {
-    while (_queue.length > _config.maxQueueSize) {
-      _queue.removeLast();
-    }
-  }
-
   void play() {
-    if (_phase == DanmuPhase.ready || _phase == DanmuPhase.paused) {
-      _phase = DanmuPhase.playing;
+    if (_phase == _DanmuPhase.stopped) {
+      _phase = _DanmuPhase.playing;
       notifyListeners();
     }
   }
 
   void pause() {
-    if (_phase == DanmuPhase.playing) {
-      _phase = DanmuPhase.paused;
+    if (_phase == _DanmuPhase.playing) {
+      _phase = _DanmuPhase.stopped;
       notifyListeners();
     }
   }
@@ -410,12 +291,12 @@ class DanmuEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Integrates motion. [elapsed] is the delta since the previous call, not
-  /// an absolute timestamp, so pause/resume cannot produce time jumps.
   void advance(Duration elapsed) {
-    if (_phase != DanmuPhase.playing) return;
+    if (_phase != _DanmuPhase.playing) return;
+
     final seconds = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
     if (seconds <= 0) return;
+
     for (final item in _active) {
       item.left -= item.speed * seconds;
     }
@@ -434,15 +315,9 @@ class DanmuEngine extends ChangeNotifier {
     }
   }
 
-  /// A lane accepts the entry when the launch gap to the nearest item ahead
-  /// is respected AND the entry can never overlap any item ahead. Because
-  /// speeds can differ per entry, "never overlap" must hold for every
-  /// slower item on the lane, not just the nearest one: catching up takes
-  /// `(width - tail) / (vNew - vOld)` seconds while the slower item needs
-  /// `tail / vOld` seconds to leave the viewport, so the faster entry is
-  /// only admitted when the slower item is gone by then.
   int? _findAvailableLane(DanmuEntry entry) {
     if (_laneCount == 0) return null;
+
     final entrySpeed = entry.speed ?? _config.speed;
     final candidates = <int>[];
     final hintedLane = entry.laneHint;
@@ -452,13 +327,16 @@ class DanmuEngine extends ChangeNotifier {
     for (var index = 0; index < _laneCount; index++) {
       if (index != hintedLane) candidates.add(index);
     }
+
     for (final lane in candidates) {
       var nearestTail = double.negativeInfinity;
       var catchesUp = false;
+
       for (final item in _active) {
         if (item.lane != lane) continue;
         final tail = item.left + item.entry.width;
         if (tail > nearestTail) nearestTail = tail;
+
         if (entrySpeed > item.speed) {
           final timeToCatch = (_size.width - tail) / (entrySpeed - item.speed);
           final timeToExit = tail / item.speed;
@@ -468,18 +346,20 @@ class DanmuEngine extends ChangeNotifier {
           }
         }
       }
+
       if (catchesUp) continue;
       if (nearestTail == double.negativeInfinity ||
           nearestTail + _config.gap <= _size.width) {
         return lane;
       }
     }
+
     return null;
   }
 
   void _activate(DanmuEntry entry, int lane) {
     _active.add(
-      _DanmuItem(
+      ActiveDanmu(
         entry: entry,
         lane: lane,
         left: _size.width,
@@ -521,20 +401,4 @@ class DanmuEngine extends ChangeNotifier {
     }
     return value;
   }
-}
-
-class _DanmuItem {
-  _DanmuItem({
-    required this.entry,
-    required this.lane,
-    required this.left,
-    required this.speed,
-    required this.renderId,
-  });
-
-  final DanmuEntry entry;
-  final int lane;
-  final double speed;
-  final int renderId;
-  double left;
 }

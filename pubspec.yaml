@@ -1,9 +1,9 @@
 name: hax_danmu
-description: A self-contained, lane-aware Flutter danmu (bullet comment) widget.
-version: 0.1.0
-homepage: https://github.com/YOUR_USERNAME/hax_danmu
-repository: https://github.com/YOUR_USERNAME/hax_danmu
-issue_tracker: https://github.com/YOUR_USERNAME/hax_danmu/issues
+description: A lane-aware Flutter danmaku, barrage, and bullet comment widget.
+version: 0.2.0
+homepage: https://github.com/xiehanff/HaxDanmu
+repository: https://github.com/xiehanff/HaxDanmu
+issue_tracker: https://github.com/xiehanff/HaxDanmu/issues
 
 environment:
   sdk: '>=3.6.0 <4.0.0'

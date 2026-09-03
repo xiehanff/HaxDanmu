@@ -29,25 +29,12 @@ class _DanmuDemoPageState extends State<DanmuDemoPage> {
   int _sequence = 0;
   DanmuEnqueueResult? _lastResult;
 
-  @override
-  void initState() {
-    super.initState();
-    debugPrint('[demo] DanmuDemoPage initState');
-  }
-
-  @override
-  void dispose() {
-    debugPrint('[demo] DanmuDemoPage dispose');
-    super.dispose();
-  }
-
   DanmuEntry _entry({
     required String text,
     DanmuPriority priority = DanmuPriority.normal,
   }) {
-    final id = 'demo-${++_sequence}';
     return DanmuEntry(
-      id: id,
+      id: 'demo-${++_sequence}',
       width: 220,
       priority: priority,
       child: DecoratedBox(
@@ -61,7 +48,10 @@ class _DanmuDemoPageState extends State<DanmuDemoPage> {
           borderRadius: BorderRadius.circular(17),
           boxShadow: const [
             BoxShadow(
-                color: Colors.black38, blurRadius: 8, offset: Offset(0, 3)),
+              color: Colors.black38,
+              blurRadius: 8,
+              offset: Offset(0, 3),
+            ),
           ],
         ),
         child: Padding(
@@ -97,19 +87,17 @@ class _DanmuDemoPageState extends State<DanmuDemoPage> {
   void _send(String text, {DanmuPriority priority = DanmuPriority.normal}) {
     final result = _handle.send(_entry(text: text, priority: priority));
     setState(() => _lastResult = result);
-    debugPrint('[hax_danmu] send result=${result.name} text=$text');
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      key: const ValueKey('danmu-demo-page'),
       appBar: AppBar(title: const Text('HaxDanmu 弹幕演示')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
           Text(
-            '引擎用枚举表示阶段，组件内部拥有 Ticker；宿主只持有可选命令句柄。',
+            '页面只持有 DanmuHandle；调度、Ticker 和轨道状态由组件内部管理。',
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           const SizedBox(height: 16),
@@ -128,14 +116,11 @@ class _DanmuDemoPageState extends State<DanmuDemoPage> {
                   laneSpacing: 14,
                 ),
                 showLanes: true,
-                onDisposed: () => debugPrint(
-                  '[hax_danmu] disposed label=danmu-page',
-                ),
               ),
             ),
           ),
           const SizedBox(height: 12),
-          Text('最近一次入队：${_lastResult?.name ?? '暂无'}'),
+          Text('最近一次发送：${_lastResult?.name ?? '暂无'}'),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,

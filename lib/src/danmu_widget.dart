@@ -3,32 +3,67 @@ import 'package:flutter/scheduler.dart';
 
 import 'danmu_engine.dart';
 
-/// A lane-based danmu layer. The widget owns only the ticker; scheduling,
-/// queueing and motion live in [DanmuEngine]. The optional [handle] lets a
-/// page send commands without owning state, and its methods are safe no-ops
-/// once the widget is disposed.
+/// Command bridge for a mounted [HaxDanmu].
+///
+/// Commands are safe no-ops before attachment and after disposal. Binding
+/// ownership stays private to the widget so hosts only see the commands they
+/// are expected to call.
+class DanmuHandle {
+  DanmuEnqueueResult send(DanmuEntry entry) =>
+      _send?.call(entry) ?? DanmuEnqueueResult.rejected;
+
+  void play() => _play?.call();
+  void pause() => _pause?.call();
+  void clear() => _clear?.call();
+
+  DanmuEnqueueResult Function(DanmuEntry entry)? _send;
+  VoidCallback? _play;
+  VoidCallback? _pause;
+  VoidCallback? _clear;
+  Object? _attachment;
+
+  Object _attach({
+    required DanmuEnqueueResult Function(DanmuEntry entry) send,
+    required VoidCallback play,
+    required VoidCallback pause,
+    required VoidCallback clear,
+  }) {
+    final attachment = Object();
+    _attachment = attachment;
+    _send = send;
+    _play = play;
+    _pause = pause;
+    _clear = clear;
+    return attachment;
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    _send = null;
+    _play = null;
+    _pause = null;
+    _clear = null;
+  }
+}
+
+/// A lane-based danmu layer.
+///
+/// Scheduling and motion live in [DanmuEngine]; this widget only adapts that
+/// state to Flutter layout and a single [Ticker].
 class HaxDanmu extends StatefulWidget {
   const HaxDanmu({
     super.key,
     this.handle,
     this.config = const DanmuConfig(),
-    this.background,
     this.showLanes = false,
-    this.onDisposed,
   });
 
   final DanmuHandle? handle;
-
-  /// Layout and motion rules. Changes take effect at runtime: lane metrics
-  /// are recomputed and active entries on removed lanes are dropped.
   final DanmuConfig config;
 
-  final Widget? background;
-
-  /// Draws the effective lane bands; a debug aid.
+  /// Draws the effective lane bands as a debug aid.
   final bool showLanes;
-
-  final VoidCallback? onDisposed;
 
   @override
   State<HaxDanmu> createState() => _HaxDanmuState();
@@ -50,7 +85,7 @@ class _HaxDanmuState extends State<HaxDanmu>
   }
 
   void _attachHandle(DanmuHandle? handle) {
-    _handleAttachment = handle?.attach(
+    _handleAttachment = handle?._attach(
       send: _send,
       play: _play,
       pause: _pause,
@@ -61,7 +96,7 @@ class _HaxDanmuState extends State<HaxDanmu>
   void _detachHandle(DanmuHandle? handle) {
     final attachment = _handleAttachment;
     if (handle != null && attachment != null) {
-      handle.detach(attachment);
+      handle._detach(attachment);
     }
     _handleAttachment = null;
   }
@@ -83,18 +118,13 @@ class _HaxDanmuState extends State<HaxDanmu>
     _detachHandle(widget.handle);
     _ticker.dispose();
     _engine.dispose();
-    try {
-      widget.onDisposed?.call();
-    } finally {
-      super.dispose();
-    }
+    super.dispose();
   }
 
   void _onTick(Duration elapsed) {
     final previous = _lastTick;
     _lastTick = elapsed;
     if (previous != null) _engine.advance(elapsed - previous);
-    // Waiting entries without an active lane do not need frame callbacks.
     if (!_engine.needsFrame) _stopTicker();
   }
 
@@ -115,10 +145,9 @@ class _HaxDanmuState extends State<HaxDanmu>
   }
 
   void _ensureTicker() {
-    if (!_ticker.isActive) {
-      _lastTick = null;
-      _ticker.start();
-    }
+    if (_ticker.isActive) return;
+    _lastTick = null;
+    _ticker.start();
   }
 
   void _stopTicker() {
@@ -130,22 +159,19 @@ class _HaxDanmuState extends State<HaxDanmu>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Fallbacks keep the component alive inside unbounded parents while
-        // constraints.constrain keeps Engine geometry identical to the final
-        // render size when the parent also supplies non-zero minimums.
         final desiredSize = Size(
           constraints.maxWidth.isFinite ? constraints.maxWidth : 300,
           constraints.maxHeight.isFinite ? constraints.maxHeight : 160,
         );
         final size = constraints.constrain(desiredSize);
         _engine.configure(size);
-        // configure may activate pending/queued entries or invalidate the
-        // geometry. Start frames only when time can visibly advance state.
+
         if (_engine.needsFrame) {
           _ensureTicker();
         } else {
           _stopTicker();
         }
+
         return AnimatedBuilder(
           animation: _engine,
           builder: (context, child) => ClipRect(
@@ -155,8 +181,6 @@ class _HaxDanmuState extends State<HaxDanmu>
               child: Stack(
                 clipBehavior: Clip.hardEdge,
                 children: [
-                  if (widget.background != null)
-                    Positioned.fill(child: widget.background!),
                   if (widget.showLanes)
                     _LaneOverlay(
                       laneCount: _engine.laneCount,
@@ -183,9 +207,6 @@ class _HaxDanmuState extends State<HaxDanmu>
   }
 }
 
-/// One debug band per lane. It uses the engine's effective lane count, which
-/// can be smaller than [DanmuConfig.laneCount] when the height cannot fit
-/// them all; with that count the column can never overflow its height.
 class _LaneOverlay extends StatelessWidget {
   const _LaneOverlay({
     required this.laneCount,

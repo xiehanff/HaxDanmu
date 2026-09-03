@@ -4,8 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hax_danmu/hax_danmu.dart';
 
 void main() {
-  // Center releases the navigator's tight full-screen constraints so the
-  // SizedBox really dictates the component size.
   Widget hostWith(double height, DanmuConfig config) => MaterialApp(
         home: Center(
           child: SizedBox(
@@ -24,10 +22,8 @@ void main() {
         matching: find.byType(DecoratedBox),
       );
 
-  testWidgets('lane overlay follows the effective and updated lane count',
+  testWidgets('lane overlay follows effective and updated lane count',
       (tester) async {
-    // Height 200 / extent 40 fits five lanes, but laneCount caps them at 4:
-    // the overlay must mirror the engine, not the raw config.
     await tester.pumpWidget(
       hostWith(
         200,
@@ -39,10 +35,8 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
     expect(laneBands(), findsNWidgets(4));
 
-    // A height that fits only two lanes must shrink the overlay with it.
     await tester.pumpWidget(
       hostWith(
         100,
@@ -54,11 +48,8 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
     expect(laneBands(), findsNWidgets(2));
 
-    // A viewport shorter than one lane keeps the overlay empty instead of
-    // producing a RenderFlex overflow for a clipped lane.
     await tester.pumpWidget(
       hostWith(
         20,
@@ -70,10 +61,8 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
     expect(laneBands(), findsNothing);
 
-    // Runtime config changes must reach the engine through didUpdateWidget.
     await tester.pumpWidget(
       hostWith(
         200,
@@ -85,7 +74,6 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
     expect(laneBands(), findsNWidgets(2));
   });
 
@@ -110,7 +98,6 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
 
     expect(
       handle.send(const DanmuEntry(
@@ -122,9 +109,6 @@ void main() {
     );
     await tester.pump();
 
-    // An active ticker schedules another frame after this pump. With no
-    // effective lane the queue must instead remain dormant until layout
-    // changes, so there should be no pending frame at all.
     expect(tester.binding.hasScheduledFrame, isFalse);
   });
 
@@ -150,7 +134,6 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
 
     expect(
       handle.send(const DanmuEntry(
@@ -177,9 +160,6 @@ void main() {
     expect(find.text('A:A'), findsOneWidget);
     expect(find.text('B:B'), findsOneWidget);
 
-    // Seed the ticker's previous timestamp, then advance enough for A to
-    // leave while B remains. Without stable keys Flutter can reuse A's State
-    // for B when the active child list shifts from [A, B] to [B].
     await tester.pump();
     await tester.pump(const Duration(seconds: 2));
 
@@ -211,7 +191,6 @@ void main() {
         ),
       ),
     );
-    await tester.pump();
 
     expect(
       handle.send(const DanmuEntry(
@@ -228,19 +207,129 @@ void main() {
 
     handle.pause();
     await tester.pump(const Duration(seconds: 5));
-    final whilePaused = tester.getTopLeft(find.byKey(childKey)).dx;
-    expect(whilePaused, closeTo(beforePause, 0.001));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforePause, 0.001),
+    );
 
     handle.play();
-    // The first ticker frame after resume deliberately carries a large wall
-    // clock delta. _lastTick was reset, so that delta must not move the item.
     await tester.pump(const Duration(seconds: 5));
-    final firstResumeFrame = tester.getTopLeft(find.byKey(childKey)).dx;
-    expect(firstResumeFrame, closeTo(beforePause, 0.001));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforePause, 0.001),
+    );
 
     await tester.pump(const Duration(seconds: 1));
-    final oneSecondLater = tester.getTopLeft(find.byKey(childKey)).dx;
-    expect(oneSecondLater, closeTo(beforePause - 50, 0.001));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforePause - 50, 0.001),
+    );
+  });
+
+  testWidgets('stale widget disposal cannot detach a newer handle owner',
+      (tester) async {
+    const newerKey = ValueKey('newer-danmu');
+    const entryKey = ValueKey('newer-entry');
+    const config = DanmuConfig(
+      laneCount: 1,
+      laneHeight: 40,
+      laneSpacing: 0,
+    );
+    final handle = DanmuHandle();
+
+    Widget host({required bool includeOld}) => MaterialApp(
+          home: Column(
+            children: [
+              if (includeOld)
+                SizedBox(
+                  width: 300,
+                  height: 40,
+                  child: HaxDanmu(
+                    key: const ValueKey('old-danmu'),
+                    handle: handle,
+                    config: config,
+                  ),
+                ),
+              SizedBox(
+                width: 300,
+                height: 40,
+                child: HaxDanmu(
+                  key: newerKey,
+                  handle: handle,
+                  config: config,
+                ),
+              ),
+            ],
+          ),
+        );
+
+    await tester.pumpWidget(host(includeOld: true));
+    await tester.pumpWidget(host(includeOld: false));
+
+    expect(
+      handle.send(const DanmuEntry(
+        id: 'newer-owner',
+        width: 50,
+        child: SizedBox(key: entryKey),
+      )),
+      DanmuEnqueueResult.accepted,
+    );
+    await tester.pump();
+
+    expect(
+      find.descendant(
+        of: find.byKey(newerKey),
+        matching: find.byKey(entryKey),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('unbounded fallback matches the actual constrained render edge',
+      (tester) async {
+    const childKey = ValueKey('unbounded-child');
+    final handle = DanmuHandle();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: SizedBox(
+            height: 40,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 500),
+                  child: HaxDanmu(
+                    handle: handle,
+                    config: const DanmuConfig(
+                      laneCount: 1,
+                      laneHeight: 40,
+                      laneSpacing: 0,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.getSize(find.byType(HaxDanmu)).width, 500);
+    expect(
+      handle.send(const DanmuEntry(
+        id: 'unbounded',
+        width: 50,
+        child: SizedBox(key: childKey),
+      )),
+      DanmuEnqueueResult.accepted,
+    );
+    await tester.pump();
+
+    final viewport = tester.getRect(find.byType(HaxDanmu));
+    final entryLeft = tester.getTopLeft(find.byKey(childKey)).dx;
+    expect(entryLeft, closeTo(viewport.right, 0.001));
   });
 }
 
