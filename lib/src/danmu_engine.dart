@@ -298,18 +298,19 @@ class DanmuEngine extends ChangeNotifier {
   /// a new default speed only affects entries activated afterwards.
   ///
   /// If [DanmuConfig.maxQueueSize] shrinks below the current waiting count,
-  /// the queue is trimmed from its tail. Because high-priority entries are
-  /// stored first and each priority is FIFO, this drops lower-priority and
-  /// newer waiting entries before older high-priority ones.
+  /// entries that can immediately use newly available lanes are activated
+  /// first. Any remaining overflow is then trimmed from the queue tail.
+  /// Because high-priority entries are stored first and each priority is FIFO,
+  /// trimming drops lower-priority and newer waiting entries first.
   void updateConfig(DanmuConfig value) {
     final validated = _validatedConfig(value);
     if (validated == _config) return;
     _config = validated;
-    _trimQueueToLimit();
     if (_size != Size.zero) {
       _setLaneCount(_laneCountFor(_size));
       _drainQueue();
     }
+    _trimQueueToLimit();
     notifyListeners();
   }
 
