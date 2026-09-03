@@ -5,7 +5,7 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-03
 
 ### Changed
 
@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Existing active entries keep the effective speed captured when activated;
   changing the default config speed affects only later activations.
 - The main package entrypoint now exposes only the host-facing widget API;
-  engine state, snapshots, render identity, and frame scheduling stay internal.
+  engine state, render identity, and frame scheduling stay internal.
 - `DanmuHandle` binding ownership is now private implementation detail; hosts
   only use `send`, `play`, `pause`, and `clear`.
 - CI verifies both Flutter 3.27.0 (declared minimum) and Flutter 3.44.8.
@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed `HaxDanmu.background`; compose a background outside the danmu layer.
 - Removed `HaxDanmu.onDisposed`; widget lifecycle stays with the owning widget.
 - Removed retroactive waiting-queue trimming on runtime config updates.
+- Removed public engine diagnostics that were not part of the host-facing API.
 
 ### Fixed
 
