@@ -2,7 +2,7 @@
 
 评审遗留事项，按优先级分组。已经完成的底层正确性与 API 减法不再混在待办中。
 
-## v0.2 关键缺口
+## v0.3 候选
 
 1. **文本便捷 API** —— 宿主目前必须自己量出文本宽度才能构造 `DanmuEntry`，是当前最大的易用性硬伤。
    做法：增加文本便捷构造能力，内部通过 `TextPainter` 测量宽度，并处理文本方向、样式、缩放等影响实际宽度的输入；
@@ -42,7 +42,6 @@
 ## 发布 pub.dev 前
 
 11. 增加 `dart pub publish --dry-run` 的发布前检查，并确认 LICENSE / README / CHANGELOG / example 均满足 pub.dev 展示要求。
-12. 发布前把版本从 `0.1.0` 提升到与当前行为变化匹配的 `0.2.0`，并将 CHANGELOG 的 Unreleased 固化为正式版本条目。
 
 ## 已完成的评审修复与减法
 
@@ -55,8 +54,9 @@
 - `maxQueueSize` 改为 admission limit，运行时缩小不再静默删除已接受消息；
 - zero-size → 恢复布局时已接受 waiting entry 不再静默丢失；
 - `DanmuConfig` Release 模式运行时校验；
-- 主入口只导出宿主需要的公开 API，不再暴露 Engine / Snapshot / render identity / frame 状态；
+- 主入口只导出宿主需要的公开 API，不再暴露 Engine / render identity / frame 状态；
 - 删除 `HaxDanmu.background` 与 `HaxDanmu.onDisposed`；
 - 删除只锁 queue trim 内部顺序和极端浮点实现细节的测试；
-- `pubspec.yaml` 已填入真实仓库地址并补充检索关键词；
+- `pubspec.yaml` 已填入真实仓库地址、补充检索关键词并提升到 `0.2.0`；
+- CHANGELOG 已固化 `0.2.0` 版本条目；
 - Flutter 最低版本与当前开发版本 CI matrix。
