@@ -230,6 +230,11 @@ void main() {
       (tester) async {
     const newerKey = ValueKey('newer-danmu');
     const entryKey = ValueKey('newer-entry');
+    const config = DanmuConfig(
+      laneCount: 1,
+      laneHeight: 40,
+      laneSpacing: 0,
+    );
     final handle = DanmuHandle();
 
     Widget host({required bool includeOld}) => MaterialApp(
@@ -242,6 +247,7 @@ void main() {
                   child: HaxDanmu(
                     key: const ValueKey('old-danmu'),
                     handle: handle,
+                    config: config,
                   ),
                 ),
               SizedBox(
@@ -250,6 +256,7 @@ void main() {
                 child: HaxDanmu(
                   key: newerKey,
                   handle: handle,
+                  config: config,
                 ),
               ),
             ],
