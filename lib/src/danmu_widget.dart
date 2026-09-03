@@ -74,6 +74,7 @@ class _HaxDanmuState extends State<HaxDanmu>
   late final DanmuEngine _engine;
   late final Ticker _ticker;
   Duration? _lastTick;
+  bool? _tickerModeEnabled;
   Object? _handleAttachment;
 
   @override
@@ -87,9 +88,14 @@ class _HaxDanmuState extends State<HaxDanmu>
 
   @override
   void didChangeDependencies() {
-    final wasMuted = _ticker.muted;
     super.didChangeDependencies();
-    if (wasMuted != _ticker.muted) {
+    // TickerMode.valuesOf is newer than the package's Flutter 3.27 minimum.
+    // Keep this compatibility read until the minimum supported Flutter moves
+    // past the transition, then migrate to the newer API.
+    // ignore: deprecated_member_use
+    final tickerModeEnabled = TickerMode.of(context);
+    if (_tickerModeEnabled != tickerModeEnabled) {
+      _tickerModeEnabled = tickerModeEnabled;
       _resetTickBaseline();
     }
   }
