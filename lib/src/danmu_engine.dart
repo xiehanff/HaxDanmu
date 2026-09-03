@@ -314,8 +314,14 @@ class DanmuEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  int _laneCountFor(Size size) =>
-      (size.height / _config.laneExtent).floor().clamp(0, _config.laneCount);
+  int _laneCountFor(Size size) {
+    final theoreticalCount = size.height / _config.laneExtent;
+    if (!theoreticalCount.isFinite || theoreticalCount >= _config.laneCount) {
+      return _config.laneCount;
+    }
+    if (theoreticalCount <= 0) return 0;
+    return theoreticalCount.floor();
+  }
 
   void _setLaneCount(int nextLaneCount) {
     if (nextLaneCount == _laneCount) return;
