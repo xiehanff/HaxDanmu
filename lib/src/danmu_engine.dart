@@ -2,25 +2,22 @@ import 'dart:collection';
 
 import 'package:flutter/widgets.dart';
 
-/// Playback priority. High-priority entries are ordered before normal ones
-/// whenever they are waiting to be activated.
+/// Playback priority for entries waiting to be activated.
 enum DanmuPriority { normal, high }
 
-/// Internal lifecycle of the scheduling engine.
-enum DanmuPhase { unconfigured, ready, playing, paused }
-
-/// Outcome of an enqueue request.
+/// Result returned by [DanmuHandle.send].
 enum DanmuEnqueueResult {
   /// Placed on a lane immediately.
   accepted,
 
-  /// Accepted by the engine and waiting for layout or an available lane.
+  /// Accepted and waiting for layout or an available lane.
   queued,
 
-  /// Dropped because the entry is invalid or the waiting queue is full.
+  /// Rejected because the entry is invalid or the waiting queue is full.
   rejected,
 }
 
+/// Immutable layout and motion configuration for [HaxDanmu].
 @immutable
 class DanmuConfig {
   const DanmuConfig({
@@ -33,10 +30,19 @@ class DanmuConfig {
     this.autoStart = true,
   });
 
+  /// Painted height of one lane entry.
   final double laneHeight;
+
+  /// Vertical spacing after each lane.
   final double laneSpacing;
+
+  /// Maximum number of lanes; actual count also depends on viewport height.
   final int laneCount;
+
+  /// Minimum launch gap between neighbouring entries on one lane.
   final double gap;
+
+  /// Default scrolling speed in logical pixels per second.
   final double speed;
 
   /// Maximum number of entries waiting to be activated.
@@ -46,8 +52,10 @@ class DanmuConfig {
   /// waiting count falls below the new limit.
   final int maxQueueSize;
 
+  /// Whether playback starts automatically once valid layout is available.
   final bool autoStart;
 
+  /// Vertical pitch occupied by one lane.
   double get laneExtent => laneHeight + laneSpacing;
 
   @override
@@ -79,6 +87,7 @@ class DanmuConfig {
       'maxQueueSize: $maxQueueSize, autoStart: $autoStart)';
 }
 
+/// One danmu payload.
 @immutable
 class DanmuEntry {
   const DanmuEntry({
@@ -90,27 +99,45 @@ class DanmuEntry {
     this.laneHint,
   }) : assert(width > 0 && width != double.infinity);
 
+  /// Host-owned business identifier. It is not used as render identity.
   final String id;
+
+  /// Widget painted for this entry.
   final Widget child;
+
+  /// Expected painted width of [child] in logical pixels.
+  ///
+  /// The scheduler uses this value for collision and exit calculations, so it
+  /// must match the rendered width supplied by the host.
   final double width;
+
+  /// Optional per-entry speed override.
   final double? speed;
+
+  /// Waiting-queue priority.
   final DanmuPriority priority;
+
+  /// Preferred lane; ignored when unavailable or out of range.
   final int? laneHint;
 }
 
-@immutable
+enum _DanmuPhase { unconfigured, stopped, playing }
+
+/// Internal mutable render/scheduling item shared with the Flutter adapter.
 class ActiveDanmu {
-  const ActiveDanmu({
+  ActiveDanmu({
     required this.entry,
     required this.lane,
     required this.left,
+    required this.speed,
     required this.renderId,
   });
 
   final DanmuEntry entry;
   final int lane;
-  final double left;
+  final double speed;
   final int renderId;
+  double left;
 }
 
 /// Internal scheduling state: lanes, queueing, and per-frame motion.
@@ -118,9 +145,11 @@ class DanmuEngine extends ChangeNotifier {
   DanmuEngine(DanmuConfig config) : _config = _validatedConfig(config);
 
   DanmuConfig _config;
-  final List<_DanmuItem> _active = [];
+  final List<ActiveDanmu> _active = [];
+  late final UnmodifiableListView<ActiveDanmu> _activeView =
+      UnmodifiableListView(_active);
   final Queue<DanmuEntry> _queue = Queue<DanmuEntry>();
-  DanmuPhase _phase = DanmuPhase.unconfigured;
+  _DanmuPhase _phase = _DanmuPhase.unconfigured;
   Size _size = Size.zero;
   int _laneCount = 0;
   int _nextRenderId = 0;
@@ -128,23 +157,13 @@ class DanmuEngine extends ChangeNotifier {
   DanmuConfig get config => _config;
   int get laneCount => _laneCount;
   int get waitingCount => _queue.length;
+  UnmodifiableListView<ActiveDanmu> get activeItems => _activeView;
 
   bool get needsFrame =>
-      _phase == DanmuPhase.playing &&
+      _phase == _DanmuPhase.playing &&
       _active.isNotEmpty &&
       _size != Size.zero &&
       _laneCount > 0;
-
-  UnmodifiableListView<ActiveDanmu> get activeItems => UnmodifiableListView(
-        _active
-            .map((item) => ActiveDanmu(
-                  entry: item.entry,
-                  lane: item.lane,
-                  left: item.left,
-                  renderId: item.renderId,
-                ))
-            .toList(growable: false),
-      );
 
   /// Publishes viewport geometry. Never notifies because the widget calls this
   /// from build and already rebuilds in the same frame.
@@ -163,8 +182,8 @@ class DanmuEngine extends ChangeNotifier {
 
     _size = size;
     _setLaneCount(nextLaneCount);
-    if (_phase == DanmuPhase.unconfigured) {
-      _phase = _config.autoStart ? DanmuPhase.playing : DanmuPhase.ready;
+    if (_phase == _DanmuPhase.unconfigured) {
+      _phase = _config.autoStart ? _DanmuPhase.playing : _DanmuPhase.stopped;
     }
     _drainQueue();
   }
@@ -253,15 +272,15 @@ class DanmuEngine extends ChangeNotifier {
   }
 
   void play() {
-    if (_phase == DanmuPhase.ready || _phase == DanmuPhase.paused) {
-      _phase = DanmuPhase.playing;
+    if (_phase == _DanmuPhase.stopped) {
+      _phase = _DanmuPhase.playing;
       notifyListeners();
     }
   }
 
   void pause() {
-    if (_phase == DanmuPhase.playing) {
-      _phase = DanmuPhase.paused;
+    if (_phase == _DanmuPhase.playing) {
+      _phase = _DanmuPhase.stopped;
       notifyListeners();
     }
   }
@@ -273,7 +292,7 @@ class DanmuEngine extends ChangeNotifier {
   }
 
   void advance(Duration elapsed) {
-    if (_phase != DanmuPhase.playing) return;
+    if (_phase != _DanmuPhase.playing) return;
 
     final seconds = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
     if (seconds <= 0) return;
@@ -340,7 +359,7 @@ class DanmuEngine extends ChangeNotifier {
 
   void _activate(DanmuEntry entry, int lane) {
     _active.add(
-      _DanmuItem(
+      ActiveDanmu(
         entry: entry,
         lane: lane,
         left: _size.width,
@@ -382,20 +401,4 @@ class DanmuEngine extends ChangeNotifier {
     }
     return value;
   }
-}
-
-class _DanmuItem {
-  _DanmuItem({
-    required this.entry,
-    required this.lane,
-    required this.left,
-    required this.speed,
-    required this.renderId,
-  });
-
-  final DanmuEntry entry;
-  final int lane;
-  final double speed;
-  final int renderId;
-  double left;
 }
