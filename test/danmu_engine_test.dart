@@ -22,8 +22,8 @@ void main() {
 
     expect(engine.enqueue(entry('first')), DanmuEnqueueResult.accepted);
     expect(engine.enqueue(entry('second')), DanmuEnqueueResult.queued);
-    expect(engine.snapshot.activeCount, 1);
-    expect(engine.snapshot.queuedCount, 1);
+    expect(engine.activeItems, hasLength(1));
+    expect(engine.waitingCount, 1);
   });
 
   test('drains a queued item after the active item exits', () {
@@ -43,7 +43,7 @@ void main() {
     engine.advance(const Duration(seconds: 4));
 
     expect(engine.activeItems.single.entry.id, 'second');
-    expect(engine.snapshot.queuedCount, 0);
+    expect(engine.waitingCount, 0);
   });
 
   test('high priority waits ahead of normal entries and stays FIFO', () {
@@ -123,8 +123,8 @@ void main() {
 
     engine.configure(const Size(300, 80));
 
-    expect(engine.snapshot.activeCount, 1);
-    expect(engine.snapshot.queuedCount, 0);
+    expect(engine.activeItems, hasLength(1));
+    expect(engine.waitingCount, 0);
   });
 
   test('prevents a faster follower from catching a slower entry', () {
@@ -249,12 +249,12 @@ void main() {
 
     engine.configure(Size.zero);
 
-    expect(engine.snapshot.activeCount, 1);
+    expect(engine.activeItems, hasLength(1));
     expect(engine.needsFrame, isFalse);
 
     engine.configure(const Size(300, 40));
 
-    expect(engine.snapshot.activeCount, 1);
+    expect(engine.activeItems, hasLength(1));
     expect(engine.needsFrame, isTrue);
   });
 
@@ -349,7 +349,7 @@ void main() {
     expect(engine.enqueue(entry('one')), DanmuEnqueueResult.queued);
     expect(engine.enqueue(entry('two')), DanmuEnqueueResult.queued);
     expect(engine.enqueue(entry('three')), DanmuEnqueueResult.rejected);
-    expect(engine.snapshot.queuedCount, 2);
+    expect(engine.waitingCount, 2);
   });
 
   test('zero-size accepted entries survive geometry restoration', () {
@@ -377,7 +377,7 @@ void main() {
 
     engine.advance(const Duration(seconds: 4));
     expect(engine.activeItems.single.entry.id, 'accepted-while-zero');
-    expect(engine.snapshot.queuedCount, 0);
+    expect(engine.waitingCount, 0);
   });
 
   test('lowering maxQueueSize never discards already accepted entries', () {
@@ -408,12 +408,12 @@ void main() {
       ),
     );
 
-    expect(engine.snapshot.queuedCount, 3);
+    expect(engine.waitingCount, 3);
     expect(engine.enqueue(entry('new')), DanmuEnqueueResult.rejected);
 
     engine.advance(const Duration(seconds: 4));
     expect(engine.activeItems.single.entry.id, 'one');
-    expect(engine.snapshot.queuedCount, 2);
+    expect(engine.waitingCount, 2);
   });
 
   test('pause freezes motion and resume continues from the same position', () {
@@ -453,9 +453,8 @@ void main() {
 
     engine.clear();
 
-    expect(engine.isIdle, isTrue);
-    expect(engine.snapshot.activeCount, 0);
-    expect(engine.snapshot.queuedCount, 0);
+    expect(engine.activeItems, isEmpty);
+    expect(engine.waitingCount, 0);
     expect(engine.needsFrame, isFalse);
   });
 }
