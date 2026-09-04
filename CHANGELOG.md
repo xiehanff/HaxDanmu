@@ -40,13 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prevented entries accepted while layout was unavailable from being silently
   lost when valid geometry returned.
 - Prevented pause/resume wall-clock gaps from turning into motion jumps.
+- Prevented `TickerMode` muting and app lifecycle gaps from being replayed as
+  danmu motion when frame callbacks resume.
 - Kept engine geometry aligned with the final constrained Flutter render size.
 
 ### Testing
 
 - Regression coverage now focuses on observable scheduling and widget behavior:
   collision safety, priority/FIFO, layout recovery, stable child identity,
-  handle rebinding, pause/resume, queue admission, and constraint alignment.
+  handle rebinding, pause/resume, framework ticker muting, queue admission, and
+  constraint alignment.
 - Removed tests that only existed to lock the deleted queue-trimming strategy or
   pathological floating-point implementation details.
 

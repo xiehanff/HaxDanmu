@@ -226,6 +226,130 @@ void main() {
     );
   });
 
+  testWidgets('TickerMode mute and resume do not advance silent wall-clock time',
+      (tester) async {
+    const childKey = ValueKey('ticker-mode-child');
+    const danmuKey = ValueKey('ticker-mode-danmu');
+    final handle = DanmuHandle();
+
+    Widget host(bool enabled) => MaterialApp(
+          home: Center(
+            child: SizedBox(
+              width: 300,
+              height: 40,
+              child: TickerMode(
+                enabled: enabled,
+                child: HaxDanmu(
+                  key: danmuKey,
+                  handle: handle,
+                  config: const DanmuConfig(
+                    laneCount: 1,
+                    laneHeight: 40,
+                    laneSpacing: 0,
+                    speed: 50,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(host(true));
+    expect(
+      handle.send(const DanmuEntry(
+        id: 'ticker-mode-moving',
+        width: 50,
+        child: SizedBox(key: childKey),
+      )),
+      DanmuEnqueueResult.accepted,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    final beforeMute = tester.getTopLeft(find.byKey(childKey)).dx;
+
+    await tester.pumpWidget(host(false));
+    await tester.pump(const Duration(seconds: 5));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforeMute, 0.001),
+    );
+
+    await tester.pumpWidget(host(true));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforeMute, 0.001),
+    );
+
+    // TickerMode enables the ticker during the rebuild; the resumed ticker's
+    // first callback is scheduled for the following frame. That callback must
+    // establish a fresh baseline without replaying the muted five seconds.
+    await tester.pump();
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforeMute, 0.001),
+    );
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforeMute - 50, 0.001),
+    );
+  });
+
+  testWidgets('app lifecycle gaps reset the ticker timebase', (tester) async {
+    const childKey = ValueKey('lifecycle-child');
+    final handle = DanmuHandle();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: SizedBox(
+            width: 300,
+            height: 40,
+            child: HaxDanmu(
+              handle: handle,
+              config: const DanmuConfig(
+                laneCount: 1,
+                laneHeight: 40,
+                laneSpacing: 0,
+                speed: 50,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      handle.send(const DanmuEntry(
+        id: 'lifecycle-moving',
+        width: 50,
+        child: SizedBox(key: childKey),
+      )),
+      DanmuEnqueueResult.accepted,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    final beforeLifecycleGap = tester.getTopLeft(find.byKey(childKey)).dx;
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+
+    await tester.pump(const Duration(seconds: 5));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforeLifecycleGap, 0.001),
+    );
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(
+      tester.getTopLeft(find.byKey(childKey)).dx,
+      closeTo(beforeLifecycleGap - 50, 0.001),
+    );
+  });
+
   testWidgets('stale widget disposal cannot detach a newer handle owner',
       (tester) async {
     const newerKey = ValueKey('newer-danmu');
